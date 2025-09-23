@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Download, FileText, TableIcon, AlertCircle, Loader2 } from "lucide-react"
+import { Download, FileText, TableIcon, AlertCircle, Loader2, ArrowLeft } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -15,9 +15,10 @@ interface QueryResultsProps {
   isLoading: boolean
   executedQuery: string
   onExport?: (format: "csv" | "json") => void
+  onNavigateBack?: () => void
 }
 
-export function QueryResults({ data, error, isLoading, executedQuery, onExport }: QueryResultsProps) {
+export function QueryResults({ data, error, isLoading, executedQuery, onExport, onNavigateBack }: QueryResultsProps) {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
@@ -86,6 +87,12 @@ export function QueryResults({ data, error, isLoading, executedQuery, onExport }
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
+            {onNavigateBack && (
+              <Button onClick={onNavigateBack} size="sm" variant="ghost" className="mr-2">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Builder
+              </Button>
+            )}
             <CardTitle className="text-lg flex items-center gap-2">
               <TableIcon className="h-5 w-5" />
               Query Results
@@ -137,13 +144,20 @@ export function QueryResults({ data, error, isLoading, executedQuery, onExport }
                 <p className="text-sm font-mono text-muted-foreground">{executedQuery}</p>
               </div>
             )}
+            {!executedQuery && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 max-w-md">
+                <p className="text-sm text-blue-800">
+                  💡 <strong>Tip:</strong> Build your query in the Query Builder tab, then click "Execute & View Results" to see your data here automatically!
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
             {/* Results Table */}
             <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-                <Table>
+              <div className="overflow-x-auto">
+                <Table disableScrollContainer>
                   <TableHeader className="sticky top-0 bg-background">
                     <TableRow>
                       {columns.map((column) => (

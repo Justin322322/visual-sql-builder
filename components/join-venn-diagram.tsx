@@ -40,9 +40,29 @@ export function JoinVennDiagram({ joinType, leftTable = "A", rightTable = "B", c
     }
   }
 
-  const baseColor = "#1e3a8a" // Navy blue
-  const lightColor = "#e0e7ff" // Light blue
+  const baseRGB = "30,58,138" // Navy blue (rgb)
+  const lightRGB = "224,231,255" // Light blue (rgb)
   const strokeColor = "#1e40af" // Medium blue
+
+  const size = 112
+  const overlapOffset = Math.round(size * 0.34) // balanced overlap
+  const containerWidth = size + (size - overlapOffset)
+  const containerHeight = size
+  const leftIsSolid = joinType === "LEFT" || joinType === "FULL"
+  const rightIsSolid = joinType === "RIGHT" || joinType === "FULL"
+  const leftText = leftIsSolid ? "#ffffff" : "#0f172a"
+  const rightText = rightIsSolid ? "#ffffff" : "#0f172a"
+  // Use translucency so the overlap is visually distinct
+  const solidAlpha = 0.75
+  const lightAlpha = 0.45
+  const leftBg = `rgba(${baseRGB}, ${leftIsSolid ? solidAlpha : lightAlpha})`
+  const rightBg = `rgba(${baseRGB}, ${rightIsSolid ? solidAlpha : lightAlpha})`
+  const leftAltBg = `rgba(${lightRGB}, ${lightAlpha})`
+  const rightAltBg = `rgba(${lightRGB}, ${lightAlpha})`
+  // Label positions centered under each circle
+  const labelsTop = size + 6
+  const leftCenterX = Math.round(size / 2)
+  const rightCenterX = Math.round((size - overlapOffset) + size / 2)
 
   return (
     <Card
@@ -57,67 +77,57 @@ export function JoinVennDiagram({ joinType, leftTable = "A", rightTable = "B", c
             {getJoinLabel(joinType)}
           </div>
         </div>
-
         <div className="flex justify-center mb-6">
-          <svg width="200" height="120" viewBox="0 0 200 120" className="overflow-visible">
-            <defs>
-              <mask id={`mask-${joinType}-${leftTable}-${rightTable}`}>
-                <rect width="200" height="120" fill="white" />
-                {joinType === "INNER" && (
-                  <>
-                    <circle cx="75" cy="60" r="35" fill="black" />
-                    <circle cx="125" cy="60" r="35" fill="black" />
-                  </>
-                )}
-              </mask>
-            </defs>
-
-            {/* Left Circle */}
-            <circle
-              cx="75"
-              cy="60"
-              r="35"
-              fill={
-                joinType === "LEFT" || joinType === "FULL" ? baseColor : joinType === "INNER" ? lightColor : "white"
-              }
-              stroke={strokeColor}
-              strokeWidth="2.5"
+          <div
+            className="relative"
+            style={{ width: containerWidth, height: containerHeight }}
+          >
+            {/* Left circle */}
+            <div
+              className="absolute rounded-full border"
+              style={{
+                width: size,
+                height: size,
+                left: 0,
+                top: 0,
+                borderColor: strokeColor,
+                backgroundColor: leftIsSolid ? leftBg : leftAltBg,
+              }}
+            />
+            {/* Right circle */}
+            <div
+              className="absolute rounded-full border"
+              style={{
+                width: size,
+                height: size,
+                left: size - overlapOffset,
+                top: 0,
+                borderColor: strokeColor,
+                backgroundColor: rightIsSolid ? rightBg : rightAltBg,
+              }}
             />
 
-            {/* Right Circle */}
-            <circle
-              cx="125"
-              cy="60"
-              r="35"
-              fill={
-                joinType === "RIGHT" || joinType === "FULL" ? baseColor : joinType === "INNER" ? lightColor : "white"
-              }
-              stroke={strokeColor}
-              strokeWidth="2.5"
-            />
-
+            {/* Center result indicator for INNER join */}
             {joinType === "INNER" && (
-              <path
-                d="M 100 35 A 35 35 0 0 1 100 85 A 35 35 0 0 1 100 35"
-                fill={baseColor}
-                stroke={strokeColor}
-                strokeWidth="2.5"
-              />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className="text-[10px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)] tracking-wide">MATCH</span>
+              </div>
             )}
 
-            <text x="75" y="105" textAnchor="middle" className="text-sm font-medium fill-gray-700">
+            {/* Labels below each circle, centered */}
+            <span
+              className="absolute text-[12px] font-medium"
+              style={{ top: labelsTop, left: leftCenterX, transform: "translate(-50%, 0)", color: "#0f172a" }}
+            >
               {leftTable}
-            </text>
-            <text x="125" y="105" textAnchor="middle" className="text-sm font-medium fill-gray-700">
+            </span>
+            <span
+              className="absolute text-[12px] font-medium"
+              style={{ top: labelsTop, left: rightCenterX, transform: "translate(-50%, 0)", color: "#0f172a" }}
+            >
               {rightTable}
-            </text>
-
-            {joinType === "INNER" && (
-              <text x="100" y="65" textAnchor="middle" className="text-sm font-bold fill-white">
-                MATCH
-              </text>
-            )}
-          </svg>
+            </span>
+          </div>
         </div>
 
         <div className="text-center space-y-4">
@@ -125,35 +135,17 @@ export function JoinVennDiagram({ joinType, leftTable = "A", rightTable = "B", c
 
           <div className="flex justify-center items-center gap-6 text-sm">
             <div className="flex items-center gap-2">
-              <div
-                className="w-4 h-4 rounded-full border-2"
-                style={{
-                  backgroundColor: joinType === "LEFT" || joinType === "FULL" ? baseColor : "white",
-                  borderColor: strokeColor,
-                }}
-              />
+              <div className="w-4 h-4 rounded-full border-2" style={{ backgroundColor: leftIsSolid ? leftBg : leftAltBg, borderColor: strokeColor }} />
               <span className="text-gray-700 font-medium">{leftTable}</span>
             </div>
 
             <div className="flex items-center gap-2">
-              <div
-                className="w-4 h-4 rounded-full border-2"
-                style={{
-                  backgroundColor: joinType === "RIGHT" || joinType === "FULL" ? baseColor : "white",
-                  borderColor: strokeColor,
-                }}
-              />
+              <div className="w-4 h-4 rounded-full border-2" style={{ backgroundColor: rightIsSolid ? rightBg : rightAltBg, borderColor: strokeColor }} />
               <span className="text-gray-700 font-medium">{rightTable}</span>
             </div>
 
             <div className="flex items-center gap-2">
-              <div
-                className="w-4 h-4 border-2"
-                style={{
-                  backgroundColor: baseColor,
-                  borderColor: strokeColor,
-                }}
-              />
+              <div className="w-4 h-4 border-2" style={{ backgroundColor: `rgba(${baseRGB}, ${solidAlpha})`, borderColor: strokeColor }} />
               <span className="text-gray-700 font-medium">Result</span>
             </div>
           </div>

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ChevronRight, ChevronDown, Table, Columns, Key, Link, Search, Database } from "lucide-react"
+import { ChevronRight, ChevronDown, Table, Columns, Key, Link, Search, Database, Plus, Zap } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
@@ -14,11 +14,29 @@ interface SchemaExplorerProps {
   foreignKeys: ForeignKey[]
   onTableSelect?: (tableName: string) => void
   onColumnSelect?: (tableName: string, columnName: string) => void
+  onAddToQuery?: (type: 'field' | 'join', data: any) => void
 }
 
-export function SchemaExplorer({ tables, foreignKeys, onTableSelect, onColumnSelect }: SchemaExplorerProps) {
+export function SchemaExplorer({ tables, foreignKeys, onTableSelect, onColumnSelect, onAddToQuery }: SchemaExplorerProps) {
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
   const [searchTerm, setSearchTerm] = useState("")
+
+  // Quick action handlers
+  const handleQuickAddField = (tableName: string, columnName: string) => {
+    onAddToQuery?.('field', { table: tableName, column: columnName })
+  }
+
+  const handleQuickAddJoin = (tableName: string, columnName: string) => {
+    const foreignKey = foreignKeys.find(fk => fk.table_name === tableName && fk.column_name === columnName)
+    if (foreignKey) {
+      onAddToQuery?.('join', {
+        fromTable: tableName,
+        fromColumn: columnName,
+        toTable: foreignKey.foreign_table_name,
+        toColumn: foreignKey.foreign_column_name
+      })
+    }
+  }
 
   const toggleTable = (tableName: string) => {
     const newExpanded = new Set(expandedTables)
@@ -165,6 +183,32 @@ export function SchemaExplorer({ tables, foreignKeys, onTableSelect, onColumnSel
                                 NOT NULL
                               </Badge>
                             )}
+                            
+                            {/* Quick Action Buttons */}
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleQuickAddField(table.table_name, column.column_name)
+                                }}
+                                className="p-1 hover:bg-blue-100 rounded text-blue-600 hover:text-blue-700 transition-colors"
+                                title="Add to SELECT"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                              {foreignKey && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleQuickAddJoin(table.table_name, column.column_name)
+                                  }}
+                                  className="p-1 hover:bg-green-100 rounded text-green-600 hover:text-green-700 transition-colors"
+                                  title="Add JOIN"
+                                >
+                                  <Zap className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       )

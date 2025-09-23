@@ -1,9 +1,12 @@
 "use client"
 
+import * as React from 'react'
+
 import { useState, useCallback, useMemo } from "react"
 import {
   ReactFlow,
   type Node,
+  type Edge,
   addEdge,
   useNodesState,
   useEdgesState,
@@ -13,9 +16,11 @@ import {
   ConnectionMode,
   Panel,
   MiniMap,
+  Handle,
+  Position,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { Database, Link2, Eye, Trash2, Zap } from "lucide-react"
+import { Database, Link2, Eye, Trash2, Zap, CheckCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -23,20 +28,13 @@ import { Badge } from "@/components/ui/badge"
 import { JoinVennDiagram } from "@/components/join-venn-diagram"
 import { SQLJoinsReference } from "@/components/sql-joins-reference"
 import type { TableInfo, ForeignKey } from "@/lib/database"
-
-interface JoinConnection {
-  id: string
-  fromTable: string
-  fromColumn: string
-  toTable: string
-  toColumn: string
-  joinType: "INNER" | "LEFT" | "RIGHT" | "FULL"
-}
+import type { JoinConnection } from "@/lib/join-sql"
 
 interface ReactFlowJoinBuilderProps {
   tables: TableInfo[]
   foreignKeys: ForeignKey[]
   onJoinsChange?: (joins: JoinConnection[]) => void
+  onApplyToQuery?: (joins: JoinConnection[]) => void
 }
 
 // Custom Table Node Component
@@ -45,8 +43,10 @@ function TableNode({ data }: { data: any }) {
 
   return (
     <div
-      className={`bg-white border-2 rounded-lg shadow-lg min-w-[220px] ${
-        isConnected ? "border-blue-400 shadow-blue-100" : "border-gray-200"
+      className={`bg-white border-2 rounded-lg shadow-lg min-w-[220px] transition-all duration-300 ${
+        isConnected 
+          ? "border-blue-400 shadow-blue-100 ring-2 ring-blue-100" 
+          : "border-gray-200 hover:border-gray-300 hover:shadow-md"
       }`}
     >
       {/* Header */}
@@ -58,13 +58,21 @@ function TableNode({ data }: { data: any }) {
         </Badge>
       </div>
 
-      {/* Columns */}
-      <div className="max-h-48 overflow-y-auto">
-        {table.columns.slice(0, 8).map((column: any, index: number) => (
+      {/* Columns with per-column handles */}
+      <div className="relative space-y-1">
+        {table.columns.map((column: any, index: number) => (
           <div
             key={column.column_name}
-            className="flex items-center gap-2 p-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
+            className="relative flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-sm border border-gray-100"
           >
+            {/* Target handle (incoming) on the left for this column */}
+            <Handle
+              id={`tgt:${column.column_name}`}
+              type="target"
+              position={Position.Left}
+              style={{ top: 20, background: "#94a3b8", width: 8, height: 8 }}
+            />
+
             <div
               className={`w-2 h-2 rounded-full ${column.column_name.includes("id") ? "bg-yellow-400" : "bg-gray-300"}`}
             />
@@ -72,13 +80,16 @@ function TableNode({ data }: { data: any }) {
             <Badge variant="outline" className="text-xs bg-gray-50">
               {column.data_type}
             </Badge>
+
+            {/* Source handle (outgoing) on the right for this column */}
+            <Handle
+              id={`src:${column.column_name}`}
+              type="source"
+              position={Position.Right}
+              style={{ top: 20, background: "#3b82f6", width: 8, height: 8 }}
+            />
           </div>
         ))}
-        {table.columns.length > 8 && (
-          <div className="p-2 text-xs text-gray-500 text-center bg-gray-50">
-            +{table.columns.length - 8} more columns
-          </div>
-        )}
       </div>
     </div>
   )
@@ -88,9 +99,10 @@ const nodeTypes = {
   tableNode: TableNode,
 }
 
-export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: ReactFlowJoinBuilderProps) {
+export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange, onApplyToQuery }: ReactFlowJoinBuilderProps) {
   const [connections, setConnections] = useState<JoinConnection[]>([])
   const [showVennDiagrams, setShowVennDiagrams] = useState(true)
+  const [showSuccessMessage, setShowSuccessMessage] = useState(false)
 
   // Initialize nodes
   const initialNodes: Node[] = useMemo(() => {
@@ -100,7 +112,7 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
       return {
         id: table.table_name,
         type: "tableNode",
-        position: { x: col * 280, y: row * 250 },
+        position: { x: col * 340, y: row * 300 },
         data: {
           table,
           isConnected: connections.some(
@@ -112,39 +124,94 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
   }, [tables, connections])
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
 
   // Handle new connections
   const onConnect = useCallback(
     (params: Connection) => {
       if (!params.source || !params.target || params.source === params.target) return
 
-      const newConnection: JoinConnection = {
-        id: `${params.source}-${params.target}`,
-        fromTable: params.source,
-        fromColumn: "id", // Default to id column
-        toTable: params.target,
-        toColumn: "id", // Default to id column
-        joinType: "INNER",
+      // Expect sourceHandle like "src:column" and targetHandle like "tgt:column"
+      const sourceHandle = params.sourceHandle ?? ""
+      const targetHandle = params.targetHandle ?? ""
+      const fromColumn = sourceHandle.startsWith("src:") ? sourceHandle.slice(4) : "id"
+      const toColumn = targetHandle.startsWith("tgt:") ? targetHandle.slice(4) : "id"
+
+      // Check if a connection between the same tables exists to merge predicates
+      const existingConnectionIndex = connections.findIndex(
+        (conn) => conn.fromTable === params.source && conn.toTable === params.target
+      )
+
+      if (existingConnectionIndex !== -1) {
+        const updated = [...connections]
+        const conn = updated[existingConnectionIndex]
+        // Avoid duplicate predicate
+        const alreadyExists = conn.conditions.some(
+          (c) => c.fromColumn === fromColumn && c.toColumn === toColumn
+        )
+        if (!alreadyExists) {
+          conn.conditions.push({ fromColumn, toColumn, operator: "=" })
+        }
+        setConnections(updated)
+        onJoinsChange?.(updated)
+        // Update corresponding edge label to reflect predicate count
+        setEdges((eds) =>
+          eds.map((edge) =>
+            edge.id === conn.id
+              ? {
+                  ...edge,
+                  label: `${conn.joinType} JOIN (${conn.conditions.length} condition${conn.conditions.length > 1 ? "s" : ""})`,
+                }
+              : edge,
+          ),
+        )
+      } else {
+        const newConnection: JoinConnection = {
+          id: `${params.source}->${params.target}`,
+          fromTable: params.source,
+          toTable: params.target,
+          joinType: "INNER",
+          conditions: [{ fromColumn, toColumn, operator: "=" }],
+        }
+
+        const updatedConnections = [...connections, newConnection]
+        setConnections(updatedConnections)
+        onJoinsChange?.(updatedConnections)
+
+        // Add visual edge with enhanced styling
+        const newEdge: Edge = {
+          ...params,
+          id: newConnection.id,
+          sourceHandle: params.sourceHandle,
+          targetHandle: params.targetHandle,
+          type: "smoothstep",
+          animated: true,
+          style: {
+            stroke: "#3b82f6",
+            strokeWidth: 3,
+            strokeDasharray: "5,5",
+          },
+          label: "INNER JOIN (1 condition)",
+          labelStyle: {
+            fontSize: 11,
+            fontWeight: 600,
+            fill: "#3b82f6",
+            textShadow: "1px 1px 2px rgba(255,255,255,0.8)",
+          },
+          labelBgStyle: {
+            fill: "white",
+            fillOpacity: 0.9,
+            stroke: "#3b82f6",
+            strokeWidth: 1,
+          },
+        }
+
+        setEdges((eds) => addEdge(newEdge, eds))
       }
-
-      const updatedConnections = [...connections, newConnection]
-      setConnections(updatedConnections)
-      onJoinsChange?.(updatedConnections)
-
-      // Add visual edge
-      const newEdge = {
-        ...params,
-        id: newConnection.id,
-        type: "smoothstep",
-        animated: true,
-        style: { stroke: "#3b82f6", strokeWidth: 2 },
-        label: "INNER JOIN",
-        labelStyle: { fontSize: 12, fontWeight: 600, fill: "#3b82f6" },
-        labelBgStyle: { fill: "white", fillOpacity: 0.9 },
-      }
-
-      setEdges((eds) => addEdge(newEdge, eds))
+      
+      // Show success message
+      setShowSuccessMessage(true)
+      setTimeout(() => setShowSuccessMessage(false), 3000)
     },
     [connections, onJoinsChange, setEdges],
   )
@@ -188,27 +255,35 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
 
   // Suggest joins from foreign keys
   const suggestJoinsFromForeignKeys = () => {
-    const suggestedConnections: JoinConnection[] = foreignKeys.map((fk) => ({
-      id: `${fk.table_name}-${fk.foreign_table_name}`,
-      fromTable: fk.table_name,
-      fromColumn: fk.column_name,
-      toTable: fk.foreign_table_name,
-      toColumn: fk.foreign_column_name,
-      joinType: "INNER" as const,
-    }))
-
+    const grouped = new Map<string, JoinConnection>()
+    for (const fk of foreignKeys) {
+      const key = `${fk.table_name}->${fk.foreign_table_name}`
+      const predicate = { fromColumn: fk.column_name, toColumn: fk.foreign_column_name, operator: "=" as const }
+      if (grouped.has(key)) {
+        grouped.get(key)!.conditions.push(predicate)
+      } else {
+        grouped.set(key, {
+          id: key,
+          fromTable: fk.table_name,
+          toTable: fk.foreign_table_name,
+          joinType: "INNER",
+          conditions: [predicate],
+        })
+      }
+    }
+    const suggestedConnections = Array.from(grouped.values())
     setConnections(suggestedConnections)
     onJoinsChange?.(suggestedConnections)
 
-    // Add visual edges
-    const newEdges = suggestedConnections.map((conn) => ({
+    // Add visual edges (one per connection)
+    const newEdges: Edge[] = suggestedConnections.map((conn) => ({
       id: conn.id,
       source: conn.fromTable,
       target: conn.toTable,
       type: "smoothstep",
       animated: true,
       style: { stroke: "#3b82f6", strokeWidth: 2 },
-      label: "INNER JOIN",
+      label: `INNER JOIN (${conn.conditions.length} condition${conn.conditions.length > 1 ? "s" : ""})`,
       labelStyle: { fontSize: 12, fontWeight: 600, fill: "#3b82f6" },
       labelBgStyle: { fill: "white", fillOpacity: 0.9 },
     }))
@@ -234,6 +309,13 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
           </Badge>
         </div>
         <div className="flex gap-2">
+          <Button
+            onClick={() => onApplyToQuery?.(connections)}
+            size="sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            Apply to Query
+          </Button>
           <Button
             onClick={() => setShowVennDiagrams(!showVennDiagrams)}
             size="sm"
@@ -278,6 +360,18 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
         </Card>
       )}
 
+      {/* Success Notification */}
+      {showSuccessMessage && (
+        <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-right-5 duration-300">
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 shadow-lg flex items-center gap-2">
+            <CheckCircle className="h-5 w-5 text-green-600" />
+            <span className="text-sm font-medium text-green-800">
+              Join connection created successfully!
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* React Flow Canvas */}
       <Card className="border-0 shadow-sm">
         <CardContent className="p-0">
@@ -290,8 +384,17 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
               onConnect={onConnect}
               nodeTypes={nodeTypes}
               connectionMode={ConnectionMode.Loose}
-              fitView
               className="bg-transparent"
+              minZoom={0.6}
+              maxZoom={1.6}
+              zoomOnScroll={false}
+              zoomOnDoubleClick={false}
+              panOnScroll
+              panOnDrag
+              defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+              snapToGrid
+              snapGrid={[10, 10]}
+              onInit={(instance) => instance.fitView({ padding: 0.2 })}
             >
               <Background color="#e2e8f0" gap={20} />
               <Controls className="bg-white border border-gray-200 shadow-sm" />
@@ -333,7 +436,9 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
                 <div className="flex-1 grid grid-cols-4 gap-4 items-center">
                   <div className="text-sm">
                     <div className="font-semibold text-gray-900">{connection.fromTable}</div>
-                    <span className="font-mono text-gray-500 text-xs">{connection.fromColumn}</span>
+                    <span className="font-mono text-gray-500 text-xs">
+                      {connection.conditions.map(c => c.fromColumn).join(", ")}
+                    </span>
                   </div>
 
                   <div className="text-center">
@@ -355,7 +460,9 @@ export function ReactFlowJoinBuilder({ tables, foreignKeys, onJoinsChange }: Rea
 
                   <div className="text-sm">
                     <div className="font-semibold text-gray-900">{connection.toTable}</div>
-                    <span className="font-mono text-gray-500 text-xs">{connection.toColumn}</span>
+                    <span className="font-mono text-gray-500 text-xs">
+                      {connection.conditions.map(c => c.toColumn).join(", ")}
+                    </span>
                   </div>
 
                   <div className="text-right">
