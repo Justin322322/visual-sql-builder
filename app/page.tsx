@@ -18,6 +18,7 @@ export default function HomePage() {
   const [queryResults, setQueryResults] = useState<any[]>([])
   const [queryError, setQueryError] = useState<string | null>(null)
   const [isExecuting, setIsExecuting] = useState(false)
+  const [queryExecutionTime, setQueryExecutionTime] = useState<number | null>(null)
   
   // Tab state management
   const [activeTab, setActiveTab] = useState("builder")
@@ -56,9 +57,10 @@ export default function HomePage() {
 
     setIsExecuting(true)
     setQueryError(null)
-    
-    // Automatically switch to Results tab when executing
-    setActiveTab("results")
+    setQueryResults([])
+    setQueryExecutionTime(null)
+
+    const startTime = performance.now()
 
     try {
       const response = await fetch("/api/execute-query", {
@@ -70,6 +72,10 @@ export default function HomePage() {
       })
 
       const result = await response.json()
+
+      const endTime = performance.now()
+      const executionTime = Math.round(endTime - startTime)
+      setQueryExecutionTime(executionTime)
 
       if (result.error) {
         setQueryError(result.error)
@@ -238,19 +244,6 @@ export default function HomePage() {
                   <TabsList>
                     <TabsTrigger value="builder">Query Builder</TabsTrigger>
                     <TabsTrigger value="visual">Visual JOINs</TabsTrigger>
-                    <TabsTrigger value="results" className="relative">
-                      Results
-                      {queryResults.length > 0 && (
-                        <span className="absolute -top-1 -right-1 bg-green-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-                          {queryResults.length}
-                        </span>
-                      )}
-                      {queryError && (
-                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-                          !
-                        </span>
-                      )}
-                    </TabsTrigger>
                   </TabsList>
                 </div>
 
@@ -266,6 +259,15 @@ export default function HomePage() {
                         }} 
                         onExecuteQuery={executeQuery}
                         queryValidation={queryValidation}
+                        queryResults={queryResults}
+                        queryError={queryError}
+                        isExecuting={isExecuting}
+                        queryExecutionTime={queryExecutionTime}
+                        onClearResults={() => {
+                          setQueryResults([])
+                          setQueryError(null)
+                          setQueryExecutionTime(null)
+                        }}
                       />
                     </div>
                   </TabsContent>
@@ -281,20 +283,6 @@ export default function HomePage() {
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="results" className="h-full m-0">
-                    <div className="p-6">
-                      <QueryResults
-                        data={queryResults}
-                        error={queryError}
-                        isLoading={isExecuting}
-                        executedQuery={currentQuery}
-                        onExport={(format) => {
-                          console.log(`Exported as ${format}`)
-                        }}
-                        onNavigateBack={() => setActiveTab("builder")}
-                      />
-                    </div>
-                  </TabsContent>
                 </div>
               </Tabs>
             </div>

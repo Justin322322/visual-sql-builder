@@ -1,13 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Plus, Trash2, Play, Copy, RotateCcw, BookOpen, Sparkles, Users, Trophy, Package, BarChart3, User } from "lucide-react"
+import { Plus, Trash2, Play, Copy, RotateCcw, BookOpen, Sparkles, Users, Trophy, Package, BarChart3, User, CheckCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { TableInfo } from "@/lib/database"
 
 interface QueryField {
@@ -74,6 +75,11 @@ interface QueryBuilderProps {
   onQueryChange?: (query: string) => void
   onExecuteQuery?: (query: string) => void
   queryValidation?: QueryValidation
+  queryResults?: any[]
+  queryError?: string | null
+  isExecuting?: boolean
+  queryExecutionTime?: number | null
+  onClearResults?: () => void
 }
 
 // Query Templates
@@ -155,7 +161,7 @@ ORDER BY total_spent DESC`
   }
 ]
 
-export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecuteQuery, queryValidation }: QueryBuilderProps) {
+export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecuteQuery, queryValidation, queryResults = [], queryError, isExecuting = false, queryExecutionTime, onClearResults }: QueryBuilderProps) {
   const [selectedFields, setSelectedFields] = useState<QueryField[]>([])
   const [whereConditions, setWhereConditions] = useState<WhereCondition[]>([])
   const [orderByFields, setOrderByFields] = useState<OrderByField[]>([])
@@ -166,6 +172,9 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
   const [limit, setLimit] = useState<string>("")
   const [generatedQuery, setGeneratedQuery] = useState<string>("")
   const [showTemplates, setShowTemplates] = useState(false)
+  const [isLoadingTemplate, setIsLoadingTemplate] = useState(false)
+  const [showCopyFeedback, setShowCopyFeedback] = useState(false)
+  const [isTemplateMode, setIsTemplateMode] = useState(false)
 
   // Sync visual joins with query builder
   useEffect(() => {
@@ -182,12 +191,14 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
     }
   }, [visualJoins])
 
-  // Generate SQL query whenever conditions change
+  // Generate SQL query whenever conditions change (but not when in template mode)
   useEffect(() => {
-    const query = generateSQLQuery()
-    setGeneratedQuery(query)
-    onQueryChange?.(query)
-  }, [selectedFields, whereConditions, orderByFields, joinClauses, groupByFields, aggregateFields, havingConditions, limit])
+    if (!isTemplateMode) {
+      const query = generateSQLQuery()
+      setGeneratedQuery(query)
+      onQueryChange?.(query)
+    }
+  }, [selectedFields, whereConditions, orderByFields, joinClauses, groupByFields, aggregateFields, havingConditions, limit, isTemplateMode])
 
   const generateSQLQuery = (): string => {
     if (selectedFields.length === 0 && aggregateFields.length === 0) return ""
@@ -273,6 +284,12 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
   }
 
   const addField = () => {
+    // Exit template mode when user starts building manually
+    if (isTemplateMode) {
+      setIsTemplateMode(false)
+      setGeneratedQuery("")
+    }
+    
     const newField: QueryField = {
       id: Date.now().toString(),
       table: tables[0]?.table_name || "",
@@ -356,6 +373,9 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
     setAggregateFields([])
     setHavingConditions([])
     setLimit("")
+    setIsTemplateMode(false)
+    setGeneratedQuery("")
+    onQueryChange?.("")
   }
 
   // GROUP BY functions
@@ -417,44 +437,108 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
     )
   }
 
-  const copyQuery = () => {
-    navigator.clipboard.writeText(generatedQuery)
+  const copyQuery = async () => {
+    try {
+      await navigator.clipboard.writeText(generatedQuery)
+      setShowCopyFeedback(true)
+      setTimeout(() => setShowCopyFeedback(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy query:', err)
+    }
   }
 
   // Quick action functions
-  const addLimit = (limit: string) => {
-    setLimit(limit)
+  const addLimit = (limitValue: string) => {
+    if (generatedQuery) {
+      // If there's a generated query (from template), modify it directly
+      let newQuery = generatedQuery
+      if (newQuery.includes('LIMIT')) {
+        // Replace existing LIMIT
+        newQuery = newQuery.replace(/LIMIT\s+\d+/i, `LIMIT ${limitValue}`)
+      } else {
+        // Add new LIMIT at the end
+        newQuery = newQuery + `\nLIMIT ${limitValue}`
+      }
+      setGeneratedQuery(newQuery)
+      onQueryChange?.(newQuery)
+    } else {
+      // If no generated query, use the form builder approach
+      setLimit(limitValue)
+    }
   }
 
   const addCommonWhere = (condition: string) => {
-    const newCondition: WhereCondition = {
-      id: Date.now().toString(),
-      table: tables[0]?.table_name || "",
-      column: "created_at",
-      operator: ">=",
-      value: condition,
-      logicalOperator: whereConditions.length > 0 ? "AND" : undefined,
+    if (generatedQuery) {
+      // If there's a generated query (from template), modify it directly
+      let newQuery = generatedQuery
+      const whereClause = `created_at >= '${condition}'`
+      if (newQuery.includes('WHERE')) {
+        // Add to existing WHERE clause
+        newQuery = newQuery.replace(/(WHERE\s+.*?)(\n|ORDER BY|GROUP BY|HAVING|LIMIT|$)/i, `$1 AND ${whereClause}$2`)
+      } else {
+        // Add new WHERE clause before ORDER BY, GROUP BY, HAVING, or LIMIT
+        const insertBefore = /(\n(?:ORDER BY|GROUP BY|HAVING|LIMIT))/i
+        if (insertBefore.test(newQuery)) {
+          newQuery = newQuery.replace(insertBefore, `\nWHERE ${whereClause}$1`)
+        } else {
+          newQuery = newQuery + `\nWHERE ${whereClause}`
+        }
+      }
+      setGeneratedQuery(newQuery)
+      onQueryChange?.(newQuery)
+    } else {
+      // If no generated query, use the form builder approach
+      const newCondition: WhereCondition = {
+        id: Date.now().toString(),
+        table: tables[0]?.table_name || "",
+        column: "created_at",
+        operator: ">=",
+        value: condition,
+        logicalOperator: whereConditions.length > 0 ? "AND" : undefined,
+      }
+      setWhereConditions([...whereConditions, newCondition])
     }
-    setWhereConditions([...whereConditions, newCondition])
   }
 
   const optimizeQuery = () => {
-    // Add LIMIT if missing and ORDER BY exists
-    if (orderByFields.length > 0 && !limit) {
-      setLimit("100")
+    if (generatedQuery) {
+      // If there's a generated query (from template), modify it directly
+      let newQuery = generatedQuery
+      if (newQuery.includes('ORDER BY') && !newQuery.includes('LIMIT')) {
+        newQuery = newQuery + '\nLIMIT 100'
+        setGeneratedQuery(newQuery)
+        onQueryChange?.(newQuery)
+      }
+    } else {
+      // If no generated query, use the form builder approach
+      if (orderByFields.length > 0 && !limit) {
+        setLimit("100")
+      }
     }
-    
-    // Add index hints or other optimizations
     console.log("Query optimized!")
   }
 
   // Load template
   const loadTemplate = (template: any) => {
+    setIsLoadingTemplate(true)
+    setIsTemplateMode(true)
+    
+    // Clear any existing results and errors first
+    onClearResults?.()
+    
     // Parse the template query and populate the builder
     // For now, we'll set the generated query directly
     setGeneratedQuery(template.query)
-    onQueryChange?.(template.query)
+    
+    // Delay the onQueryChange call to ensure clearResults has processed
+    setTimeout(() => {
+      onQueryChange?.(template.query)
+      setIsLoadingTemplate(false)
+    }, 100)
+    
     setShowTemplates(false)
+    
+    // Don't execute automatically - let user choose when to run it
   }
 
   const getColumnsForTable = (tableName: string) => {
@@ -462,9 +546,24 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
   }
 
   return (
-    <div className="space-y-6">
-      {/* Query Templates */}
-      <Card>
+    <>
+      {/* Copy Feedback Notification */}
+      {showCopyFeedback && (
+        <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-right-5 duration-300">
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 shadow-lg flex items-center gap-2">
+            <CheckCircle className="h-5 w-5 text-green-600" />
+            <span className="text-sm font-medium text-green-800">
+              Query copied to clipboard!
+            </span>
+          </div>
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 h-full">
+      {/* Left Column - Query Builder Forms */}
+      <div className="lg:col-span-3 space-y-6 pr-2">
+        {/* Query Templates */}
+        <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
@@ -1076,126 +1175,188 @@ export function QueryBuilder({ tables, visualJoins = [], onQueryChange, onExecut
         </CardContent>
       </Card>
 
-      {/* LIMIT */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-lg">LIMIT</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3">
-            <Label className="text-sm">Limit results to:</Label>
-            <Input
-              type="number"
-              placeholder="100"
-              value={limit}
-              onChange={(e) => setLimit(e.target.value)}
-              className="w-32"
-            />
-            <span className="text-sm text-muted-foreground">rows</span>
-          </div>
-        </CardContent>
-      </Card>
+      </div>
 
-      {/* Generated Query Preview */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-lg flex items-center gap-2">
-              Generated SQL Query
-              {queryValidation && (
-                <span className={`text-xs px-2 py-1 rounded-full ${
-                  queryValidation.isValid 
-                    ? 'bg-green-100 text-green-800' 
-                    : 'bg-red-100 text-red-800'
-                }`}>
-                  {queryValidation.isValid ? '✓ Valid' : '✗ Invalid'}
-                </span>
-              )}
-            </CardTitle>
-            <div className="flex gap-2 flex-wrap">
-              <Button onClick={copyQuery} size="sm" variant="outline" disabled={!generatedQuery}>
-                <Copy className="h-4 w-4 mr-2" />
-                Copy
-              </Button>
-              <Button onClick={resetQuery} size="sm" variant="outline">
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Reset
-              </Button>
-              <Button 
-                onClick={() => onExecuteQuery?.(generatedQuery)} 
-                size="sm" 
-                disabled={!generatedQuery || (queryValidation && !queryValidation.isValid)}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Play className="h-4 w-4 mr-2" />
-                Execute & View Results
-              </Button>
-              
-              {/* Quick Actions (text links) */}
-              <div className="flex gap-2 ml-2 pl-2 border-l">
-                <Button onClick={() => addLimit("10")} size="sm" variant="link" className="px-1">LIMIT 10</Button>
-                <Button onClick={() => addLimit("100")} size="sm" variant="link" className="px-1">LIMIT 100</Button>
-                <Button onClick={() => addCommonWhere("NOW() - INTERVAL '7 days'")} size="sm" variant="link" className="px-1">Add recent filter</Button>
-                <Button onClick={optimizeQuery} size="sm" variant="link" className="px-1">Optimize query</Button>
+      {/* Right Column - Sticky SQL Preview */}
+      <div className="lg:col-span-2 order-first lg:order-last">
+        <div className="sticky top-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  Generated SQL Query
+                  {queryValidation && (
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      queryValidation.isValid 
+                        ? 'bg-green-100 text-green-800' 
+                        : 'bg-red-100 text-red-800'
+                    }`}>
+                      {queryValidation.isValid ? '✓ Valid' : '✗ Invalid'}
+                    </span>
+                  )}
+                </CardTitle>
+                <Button onClick={copyQuery} size="sm" variant="outline" disabled={!generatedQuery}>
+                  <Copy className="h-4 w-4 mr-2" />
+                  Copy
+                </Button>
               </div>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {generatedQuery ? (
-            <div className="space-y-4">
-              <Textarea
-                value={generatedQuery}
-                readOnly
-                className={`font-mono text-sm min-h-[120px] ${
-                  queryValidation && !queryValidation.isValid 
-                    ? 'bg-red-50 border-red-200' 
-                    : 'bg-muted'
-                }`}
-                placeholder="Your generated SQL query will appear here..."
-              />
-              
-              {/* Validation Messages */}
-              {queryValidation && (
-                <div className="space-y-2">
-                  {queryValidation.errors.length > 0 && (
-                    <div className="p-3 bg-red-50 border border-red-200 rounded-md">
-                      <h4 className="text-sm font-medium text-red-800 mb-2">Errors:</h4>
-                      <ul className="text-sm text-red-700 space-y-1">
-                        {queryValidation.errors.map((error, index) => (
-                          <li key={index} className="flex items-center gap-2">
-                            <span className="text-red-500">•</span>
-                            {error}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {generatedQuery ? (
+                <>
+                  <Textarea
+                    value={generatedQuery}
+                    readOnly
+                    className={`font-mono text-sm min-h-[200px] ${
+                      queryValidation && !queryValidation.isValid 
+                        ? 'bg-red-50 border-red-200' 
+                        : 'bg-muted'
+                    }`}
+                    placeholder="Your generated SQL query will appear here..."
+                  />
                   
-                  {queryValidation.warnings.length > 0 && (
-                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                      <h4 className="text-sm font-medium text-yellow-800 mb-2">Warnings:</h4>
-                      <ul className="text-sm text-yellow-700 space-y-1">
-                        {queryValidation.warnings.map((warning, index) => (
-                          <li key={index} className="flex items-center gap-2">
-                            <span className="text-yellow-500">⚠</span>
-                            {warning}
-                          </li>
-                        ))}
-                      </ul>
+                  {/* Action Buttons */}
+                  <div className="flex flex-col gap-3">
+                    {/* Quick Actions */}
+                    <div className="flex gap-0.5 pt-2 border-t flex-wrap max-w-full">
+                      <Button onClick={() => addLimit("10")} size="sm" variant="outline" className="px-1 text-xs h-6 flex-1 min-w-0">10</Button>
+                      <Button onClick={() => addLimit("100")} size="sm" variant="outline" className="px-1 text-xs h-6 flex-1 min-w-0">100</Button>
+                      <Button onClick={() => addCommonWhere("NOW() - INTERVAL '7 days'")} size="sm" variant="outline" className="px-1 text-xs h-6 flex-1 min-w-0">Recent</Button>
+                      <Button onClick={optimizeQuery} size="sm" variant="outline" className="px-1 text-xs h-6 flex-1 min-w-0">Optimize</Button>
+                    </div>
+                    
+                    {/* Primary Actions - Execute and Reset */}
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={() => onExecuteQuery?.(generatedQuery)} 
+                        size="sm" 
+                        disabled={!generatedQuery || (queryValidation && !queryValidation.isValid) || isExecuting}
+                        className="bg-green-600 hover:bg-green-700 text-white flex-1"
+                      >
+                        {isExecuting ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                            Executing...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="h-4 w-4 mr-2" />
+                            Execute & View Results
+                          </>
+                        )}
+                      </Button>
+                      <Button onClick={resetQuery} size="sm" variant="outline" className="px-3">
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Query Results */}
+                  {!isLoadingTemplate && (queryResults.length > 0 || (queryError && queryError.trim() !== '') || isExecuting) && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-medium text-gray-800">Query Results:</h4>
+                        {queryExecutionTime !== null && (
+                          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                            {queryExecutionTime}ms
+                          </span>
+                        )}
+                      </div>
+                      
+                      {isExecuting && (
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+                          <div className="flex items-center gap-2 text-blue-700">
+                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-700 border-t-transparent"></div>
+                            <span className="text-sm">Executing query...</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {queryError && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                          <h4 className="text-sm font-medium text-red-800 mb-2">Error:</h4>
+                          <p className="text-sm text-red-700">{queryError}</p>
+                        </div>
+                      )}
+                      
+                      {queryResults.length > 0 && (
+                        <div className="border rounded-md max-h-64 overflow-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                {Object.keys(queryResults[0] || {}).map((column) => (
+                                  <TableHead key={column} className="text-xs">
+                                    {column}
+                                  </TableHead>
+                                ))}
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {queryResults.slice(0, 50).map((row, index) => (
+                                <TableRow key={index}>
+                                  {Object.values(row).map((value: any, cellIndex) => (
+                                    <TableCell key={cellIndex} className="text-xs">
+                                      {value?.toString() || ''}
+                                    </TableCell>
+                                  ))}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                          {queryResults.length > 50 && (
+                            <div className="p-2 text-xs text-gray-500 text-center border-t">
+                              Showing first 50 of {queryResults.length} results
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
+
+                  {/* Validation Messages */}
+                  {queryValidation && (
+                    <div className="space-y-2">
+                      {queryValidation.errors.length > 0 && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                          <h4 className="text-sm font-medium text-red-800 mb-2">Errors:</h4>
+                          <ul className="text-sm text-red-700 space-y-1">
+                            {queryValidation.errors.map((error, index) => (
+                              <li key={index} className="flex items-center gap-2">
+                                <span className="text-red-500">•</span>
+                                {error}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      
+                      {queryValidation.warnings.length > 0 && (
+                        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                          <h4 className="text-sm font-medium text-yellow-800 mb-2">Warnings:</h4>
+                          <ul className="text-sm text-yellow-700 space-y-1">
+                            {queryValidation.warnings.map((warning, index) => (
+                              <li key={index} className="flex items-center gap-2">
+                                <span className="text-yellow-500">⚠</span>
+                                {warning}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No query generated yet.</p>
+                  <p className="text-sm">Add some SELECT fields or aggregate functions to start building your query.</p>
                 </div>
               )}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              <p>No query generated yet.</p>
-              <p className="text-sm">Add some SELECT fields or aggregate functions to start building your query.</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
+    </>
   )
 }
