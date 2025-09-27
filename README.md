@@ -1,5 +1,8 @@
 # Visual SQL Builder
 
+<img width="1919" height="915" alt="image" src="https://github.com/user-attachments/assets/25eb3e5a-eb47-41f6-885a-9d69ecc91ece" />
+
+
 An interactive SQL query builder for PostgreSQL featuring:
 
 - Visual JOIN builder (drag-to-connect with composite key support)
